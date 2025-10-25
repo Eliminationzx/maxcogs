@@ -130,6 +130,7 @@ class GitHub(commands.Cog):
                             "token": token,
                             "channel": feed_data.get("channel", None),
                             "time": feed_data["time"],
+                            "last_commit_id": feed_data.get("last_commit_id"),
                         }
 
             # Guild config has been migrated
@@ -177,9 +178,24 @@ class GitHub(commands.Cog):
         return feedparser.parse(html)
 
     @staticmethod
-    async def new_entries(entries, last_time):
+    async def new_entries(entries, last_time, last_commit_id=None):
         entries_new = []
+        seen_last_commit = False if last_commit_id else True
+        
         for e in entries:
+            # Extract commit ID from the entry link
+            if commit_match := COMMIT_REGEX.fullmatch(e.link):
+                current_commit_id = commit_match.group(1)
+                
+                # If we're looking for a specific commit, collect everything until we find it
+                if last_commit_id and not seen_last_commit:
+                    if current_commit_id == last_commit_id:
+                        seen_last_commit = True
+                        break
+                    entries_new.insert(0, e)
+                    continue
+            
+            # Fall back to time-based checking if no commit ID tracking
             e_time = (
                 datetime.strptime(e.updated, TIME_FORMAT).replace(tzinfo=timezone.utc).timestamp()
             )
@@ -187,7 +203,13 @@ class GitHub(commands.Cog):
                 entries_new.insert(0, e)
             else:
                 break
-        return entries_new, datetime.now(tz=timezone.utc)
+        
+        # Get the latest commit ID for next time
+        latest_commit_id = None
+        if entries and (commit_match := COMMIT_REGEX.fullmatch(entries[0].link)):
+            latest_commit_id = commit_match.group(1)
+        
+        return entries_new, datetime.now(tz=timezone.utc), latest_commit_id
 
     @staticmethod
     async def _parse_url(url: str):
@@ -268,25 +290,42 @@ class GitHub(commands.Cog):
             embed = discord.Embed(
                 title=f"[{user}/{repo}] New release published: {entries[0].title}",
                 color=color if color is not None else COLOR,
-                url=entries[0].link,
             )
             if not short:
-                embed.description = html2text.html2text(entries[0].content[0].value)
+                # Get full release content
+                content = html2text.html2text(entries[0].content[0].value)
+                # Discord embed description limit is 4096 characters
+                if len(content) > 4000:
+                    content = content[:4000] + "...\n\n*[Content truncated due to length]*"
+                embed.description = content
 
         else:
             num = min(len(entries), 10)
             desc = ""
             for e in entries[:num]:
+                commit_hash = COMMIT_REGEX.fullmatch(e.link).group(1)[:7]
                 if short:
-                    desc += f"[`{COMMIT_REGEX.fullmatch(e.link).group(1)[:7]}`]({e.link}) {self._escape(e.title)} – {self._escape(e.author)}\n"
+                    # Short: just hash and title
+                    desc += f"`{commit_hash}` {self._escape(e.title)}\n"
                 else:
-                    desc += f"[`{COMMIT_REGEX.fullmatch(e.link).group(1)[:7]}`]({e.link}) – {self._escape(e.author)}\n{LONG_COMMIT_REGEX.sub('', e.content[0].value)}\n\n"
+                    # Full: hash, title, and complete commit message
+                    commit_title = self._escape(e.title)
+                    # Get the full commit content and clean it
+                    commit_content = e.content[0].value
+                    # Remove HTML pre tags but keep the content
+                    commit_content = LONG_COMMIT_REGEX.sub('', commit_content)
+                    
+                    desc += f"`{commit_hash}` {commit_title}\n{commit_content}\n\n"
+                    
+                    # Check if we're approaching Discord's limit
+                    if len(desc) > 3800:
+                        desc += "*[Additional commits truncated due to Discord length limit]*\n"
+                        break
 
             embed = discord.Embed(
                 title=f"[{repo}:{branch}] {num} new commit{'s' if num > 1 else ''}",
                 color=color if color is not None else COLOR,
-                description=desc,
-                url=feed_link if num > 1 else entries[0].link,
+                description=desc[:4096] if len(desc) > 4096 else desc,
             )
 
         if timestamp:
@@ -294,11 +333,6 @@ class GitHub(commands.Cog):
                 tzinfo=timezone.utc
             )
 
-        embed.set_author(
-            name=entries[0].author,
-            url=f"https://github.com/{entries[0].author}",
-            icon_url=entries[0].media_thumbnail[0]["url"],
-        )
         return embed
 
     @commands.is_owner()
@@ -638,6 +672,11 @@ class GitHub(commands.Cog):
                     f"You already have {guild_config['limit']} feeds in this server!"
                 )
 
+            # Get the latest commit ID
+            latest_commit_id = None
+            if parsed.entries and (commit_match := COMMIT_REGEX.fullmatch(parsed.entries[0].link)):
+                latest_commit_id = commit_match.group(1)
+            
             feeds[name] = {
                 "user": user_repo_branch_token["user"],
                 "repo": user_repo_branch_token["repo"],
@@ -645,6 +684,7 @@ class GitHub(commands.Cog):
                 "token": user_repo_branch_token["token"],
                 "channel": None,
                 "time": datetime.now(tz=timezone.utc).timestamp(),
+                "last_commit_id": latest_commit_id,
             }
 
         # Send confirmation
@@ -774,7 +814,11 @@ class GitHub(commands.Cog):
                         continue
 
                     # Find new entries
-                    new_entries, new_time = await self.new_entries(parsed.entries, feed["time"])
+                    new_entries, new_time, new_commit_id = await self.new_entries(
+                        parsed.entries, 
+                        feed.get("time", 0),
+                        feed.get("last_commit_id")
+                    )
 
                     # Create feed embed
                     if e := await self._commit_embeds(
@@ -804,6 +848,8 @@ class GitHub(commands.Cog):
                             guild_id, member_id
                         ).feeds() as member_feeds:
                             member_feeds[name]["time"] = new_time.timestamp()
+                            if new_commit_id:
+                                member_feeds[name]["last_commit_id"] = new_commit_id
 
     @_github_rss.before_loop
     async def _before_github_rss(self):
