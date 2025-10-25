@@ -62,9 +62,10 @@ class GitHub(commands.Cog):
     GitHub RSS Commit Feeds
 
     Customizable system for GitHub commit updates similar to the webhook.
+    Supports both public and private repositories with personal access tokens.
     """
 
-    __version__: Final[str] = "1.0.1"
+    __version__: Final[str] = "1.1.0"
     __author__: Final[List[str]] = ["MAX", "Obi-Wan3"]
     __docs__: Final[str] = "https://cogs.maxapp.tv/"
 
@@ -156,20 +157,20 @@ class GitHub(commands.Cog):
         final_url = f"https://github.com/{feed_config['user']}/{feed_config['repo']}"
 
         if feed_config["branch"]:
-            token = f"?token={feed_config['token']}" if feed_config["token"] else ""
-
             if feed_config["branch"] == "releases":
-                return final_url + f"/{feed_config['branch']}.atom{token}"
-
-            return final_url + f"/commits/{feed_config['branch']}.atom{token}"
-
+                return final_url + f"/{feed_config['branch']}.atom"
+            return final_url + f"/commits/{feed_config['branch']}.atom"
         else:
             return final_url + f"/commits.atom"
 
     @staticmethod
-    async def _fetch(url: str, valid_statuses: list):
+    async def _fetch(url: str, valid_statuses: list, token: str = None):
+        headers = {}
+        if token:
+            headers["Authorization"] = f"token {token}"
+        
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
+            async with session.get(url, headers=headers) as resp:
                 html = await resp.read()
                 if resp.status not in valid_statuses:
                     return False
@@ -220,23 +221,25 @@ class GitHub(commands.Cog):
             or parsed_url.netloc != "github.com"
             or not user
             or not repo
-            or (token and not branch)
             or (not user_repo_branch.group(3) and branch and branch != "releases")
         ):
             return None, None, None, None
 
         return user, repo, branch, token
 
-    async def _parse_url_input(self, url: str, branch: str):
-        user, repo, parsed_branch, token = await self._parse_url(url)
-        if not any([user, repo, parsed_branch, token]):
+    async def _parse_url_input(self, url: str, branch: str, token: str = None):
+        user, repo, parsed_branch, parsed_token = await self._parse_url(url)
+        if not any([user, repo]):
             return None
+
+        # Use the provided token if no token was in the URL
+        final_token = parsed_token if parsed_token else token
 
         return {
             "user": user,
             "repo": repo,
-            "branch": parsed_branch if token else branch,
-            "token": token,
+            "branch": parsed_branch if parsed_token else branch,
+            "token": final_token,
         }
 
     async def _get_feed_channel(self, bot: discord.Member, guild_channel: int, feed_channel):
@@ -402,7 +405,7 @@ class GitHub(commands.Cog):
                 return await ctx.send(NOT_FOUND)
 
         url = await self._url_from_config(feed_config)
-        if not (parsed := await self._fetch(url, [200])):
+        if not (parsed := await self._fetch(url, [200], feed_config.get("token"))):
             return await ctx.send(await self._invalid_url(ctx))
 
         if feed_config["channel"]:
@@ -488,7 +491,8 @@ class GitHub(commands.Cog):
                     continue
                 feeds_string += f"{(await self.bot.get_or_fetch_user(member_id)).mention}: `{len(member_data['feeds'])}` feed(s) \n"
                 for name, feed in member_data["feeds"].items():
-                    feeds_string += f"- `{name}`: <{await self._repo_url(**feed)}>\n"
+                    feed_type = " 🔒" if feed.get("token") else ""
+                    feeds_string += f"- `{name}`{feed_type}: <{await self._repo_url(**feed)}>\n"
                 feeds_string += "\n"
 
         if not feeds_string:
@@ -498,7 +502,7 @@ class GitHub(commands.Cog):
         for page in pagify(feeds_string, delims=["\n\n"]):
             embeds.append(discord.Embed(description=page, color=await ctx.embed_color()))
 
-        embeds[0].title = "Server GitHub RSS Feeds"
+        embeds[0].title = "Server GitHub RSS Feeds (🔒 = Private)"
         for embed in embeds:
             await ctx.send(embed=embed)
 
@@ -543,10 +547,9 @@ class GitHub(commands.Cog):
             value=f"Just use your repo url and specify a branch if needed. For example, ```{ctx.clean_prefix}github add TestRepo https://github.com/user/repo/ <optional_branch>```",
         )
         e.add_field(
-            name="Private Repositories (This Currently Does Not Work.)",
+            name="Private Repositories",
             inline=False,
-            #    value=f'Inside the "commits" page for a chosen branch, use inspect element to search for the `.atom` link in the page html. Copy the entire url (with `?token=`); do **not** specify a value for the branch parameter. For example, ```{ctx.clean_prefix}github add TestRepo https://github.com/user/repo/commits/branch.atom?token=token```',
-            value="Private Repositories cannot be added via rss (or more like this cog at this moment).",
+            value=f"Use your repo url, branch, and a personal access token. For example, ```{ctx.clean_prefix}github add TestRepo https://github.com/user/repo/ main ghp_yourtoken```To create a token, go to GitHub Settings > Developer settings > Personal access tokens > Tokens (classic) and create one with 'repo' scope.",
         )
         return await ctx.send(embed=e)
 
@@ -557,16 +560,17 @@ class GitHub(commands.Cog):
         entries: typing.Optional[int],
         url: str,
         branch: str = None,
+        token: str = None,
     ):
         """Test out fetching a GitHub repository url."""
 
-        if not (user_repo_branch_token := await self._parse_url_input(url, branch)):
+        if not (user_repo_branch_token := await self._parse_url_input(url, branch, token)):
             return await ctx.send(await self._invalid_url(ctx))
 
         url = await self._url_from_config(user_repo_branch_token)
 
-        if not (parsed := await self._fetch(url, [200])):
-            return await ctx.send(await self._invalid_url(ctx))
+        if not (parsed := await self._fetch(url, [200], user_repo_branch_token.get("token"))):
+            return await ctx.send("Failed to fetch the repository. Check your URL and token (if private repo).")
 
         guild_config = await self.config.guild(ctx.guild).all()
 
@@ -581,11 +585,12 @@ class GitHub(commands.Cog):
         )
 
     @_github.command(name="add")
-    async def _add(self, ctx: commands.Context, name: str, url: str, branch: str = ""):
+    async def _add(self, ctx: commands.Context, name: str, url: str, branch: str = "", token: str = None):
         """
         Add a GitHub RSS feed to the server.
 
         For the accepted link formats, see `[p]github whatlinks`.
+        For private repos, provide a GitHub personal access token with 'repo' scope.
         """
         guild_config = await self.config.guild(ctx.guild).all()
 
@@ -605,13 +610,13 @@ class GitHub(commands.Cog):
             return await ctx.send("The mods have not set up a GitHub RSS feed channel yet.")
 
         # Get RSS feed url
-        if not (user_repo_branch_token := await self._parse_url_input(url, branch)):
+        if not (user_repo_branch_token := await self._parse_url_input(url, branch, token)):
             return await ctx.send(await self._invalid_url(ctx))
         url = await self._url_from_config(user_repo_branch_token)
 
         # Fetch and parse
-        if not (parsed := await self._fetch(url, [200, 304])):
-            return await ctx.send(await self._invalid_url(ctx))
+        if not (parsed := await self._fetch(url, [200, 304], user_repo_branch_token.get("token"))):
+            return await ctx.send("Failed to fetch the repository. Check your URL and token (if private repo).")
 
         # Set user config
         async with self.config.member(ctx.author).feeds() as feeds:
@@ -644,10 +649,11 @@ class GitHub(commands.Cog):
 
         # Send confirmation
         if guild_config["notify"]:
+            repo_type = "🔒 " if user_repo_branch_token["token"] else ""
             await channel.send(
                 embed=discord.Embed(
                     color=discord.Color.green(),
-                    description=f"[[{user_repo_branch_token['repo']}:{(await self._parse_url(parsed.feed.link+'.atom'))[2]}]]({await self._repo_url(**user_repo_branch_token)}) has been added by {ctx.author.mention}",
+                    description=f"{repo_type}[[{user_repo_branch_token['repo']}:{(await self._parse_url(parsed.feed.link+'.atom'))[2]}]]({await self._repo_url(**user_repo_branch_token)}) has been added by {ctx.author.mention}",
                 )
             )
 
@@ -662,7 +668,15 @@ class GitHub(commands.Cog):
             )
         )
 
-        return await ctx.send("Feed successfully added.")
+        # Delete the message if it contains a token for security
+        if token:
+            try:
+                await ctx.message.delete()
+                await ctx.send("Feed successfully added. (Your message was deleted for security)", delete_after=10)
+            except:
+                await ctx.send("Feed successfully added. **Warning:** Please delete your message containing the token!")
+        else:
+            await ctx.send("Feed successfully added.")
 
     @_github.command(name="remove", aliases=["delete"])
     async def _remove(self, ctx: commands.Context, name: str):
@@ -707,7 +721,8 @@ class GitHub(commands.Cog):
         feeds_string = ""
         async with self.config.member(ctx.author).feeds() as feeds:
             for name, feed in feeds.items():
-                feeds_string += f"`{name}`: <{await self._repo_url(**feed)}>\n"
+                feed_type = " 🔒" if feed.get("token") else ""
+                feeds_string += f"`{name}`{feed_type}: <{await self._repo_url(**feed)}>\n"
 
         if not feeds_string:
             return await ctx.send(
@@ -718,7 +733,7 @@ class GitHub(commands.Cog):
         for page in pagify(feeds_string):
             embeds.append(discord.Embed(description=page, color=await ctx.embed_color()))
 
-        embeds[0].title = "Your GitHub RSS Feeds"
+        embeds[0].title = "Your GitHub RSS Feeds (🔒 = Private)"
         for embed in embeds:
             await ctx.send(embed=embed)
 
@@ -755,7 +770,7 @@ class GitHub(commands.Cog):
                     url = await self._url_from_config(feed)
 
                     # Fetch & parse feed
-                    if not (parsed := await self._fetch(url, [200])):
+                    if not (parsed := await self._fetch(url, [200], feed.get("token"))):
                         continue
 
                     # Find new entries
