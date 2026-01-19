@@ -316,7 +316,43 @@ class GitHub(commands.Cog):
                     # Remove HTML pre tags but keep the content
                     commit_content = LONG_COMMIT_REGEX.sub('', commit_content)
                     
-                    desc += f"`{commit_hash}` {commit_title}\n{commit_content}\n\n"
+                    # Check if commit_content is just the title or starts with it
+                    # GitHub's Atom feed often includes the title in the content
+                    original_title = e.title
+                    commit_content_stripped = commit_content.strip()
+                    
+                    # Handle truncated titles (e.title might have ellipsis)
+                    # Remove ellipsis from original_title for comparison
+                    original_title_no_ellipsis = original_title.replace('…', '').replace('...', '')
+                    
+                    # Check if commit_content starts with the title (with or without ellipsis)
+                    # or if the title starts with commit_content (truncated case)
+                    is_duplicate = False
+                    remaining_content = ""
+                    
+                    if commit_content_stripped.startswith(original_title):
+                        # Exact match (content starts with full title)
+                        is_duplicate = True
+                        remaining_content = commit_content_stripped[len(original_title):].lstrip('\n').lstrip('\r')
+                    elif original_title_no_ellipsis and commit_content_stripped.startswith(original_title_no_ellipsis):
+                        # Content starts with title without ellipsis
+                        is_duplicate = True
+                        remaining_content = commit_content_stripped[len(original_title_no_ellipsis):].lstrip('\n').lstrip('\r')
+                    elif original_title.endswith('…') and commit_content_stripped.startswith(original_title[:-1]):
+                        # Title ends with ellipsis, content starts with title minus ellipsis
+                        is_duplicate = True
+                        remaining_content = commit_content_stripped[len(original_title)-1:].lstrip('\n').lstrip('\r')
+                    
+                    if is_duplicate:
+                        if remaining_content:
+                            # Has additional content beyond title
+                            desc += f"`{commit_hash}` {commit_title}\n{remaining_content}\n\n"
+                        else:
+                            # No additional content beyond title
+                            desc += f"`{commit_hash}` {commit_title}\n\n"
+                    else:
+                        # Content doesn't start with title, show both
+                        desc += f"`{commit_hash}` {commit_title}\n{commit_content}\n\n"
                     
                     # Check if we're approaching Discord's limit
                     if len(desc) > 3800:
