@@ -199,7 +199,8 @@ class GitHub(commands.Cog):
             e_time = (
                 datetime.strptime(e.updated, TIME_FORMAT).replace(tzinfo=timezone.utc).timestamp()
             )
-            if e_time > last_time:
+            # Use >= instead of > to include commits with the same timestamp
+            if e_time >= last_time:
                 entries_new.insert(0, e)
             else:
                 break
