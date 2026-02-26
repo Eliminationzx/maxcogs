@@ -27,6 +27,8 @@ To install any cog you want:
 ## Cogs on this repo: 
 - Autopublisher
     - Automatically publish messages in news channels
+- Autoresponder
+    - Keyword-based automatic message responses with cooldown management
 - Counting
     - Count from 1 to infinity!
 - Currency

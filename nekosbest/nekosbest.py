@@ -45,12 +45,12 @@ class NekosBest(commands.Cog):
 
     __version__: Final[str] = "2.5.0"
     __author__: Final[str] = "MAX"
-    __docs__: Final[str] = "This does not require docs."
+    __docs__: Final[str] = "https://cogs.maxapp.tv/"
 
     def __init__(self, bot: Red) -> None:
         self.bot: Red = bot
         self.session: aiohttp.ClientSession = aiohttp.ClientSession()
-        self.config = Config.get_conf(self, identifier=1234567890)
+        self.config = Config.get_conf(self, identifier=7654321098, force_registration=True)
         default_user = {"command_counts": {}, "received_counts": {}}
         self.config.register_user(**default_user)
 
@@ -63,10 +63,12 @@ class NekosBest(commands.Cog):
         return f"{pre_processed}\n\nAuthor: {self.__author__}\nCog Version: {self.__version__}\nDocs: {self.__docs__}"
 
     async def red_delete_data_for_user(self, *, requester: RequestType, user_id: int):
-        return
+        """Delete all user data for the specified user."""
+        await self.config.user_from_id(user_id).clear()
 
     async def red_get_data_for_user(self, *, user_id: int):
-        return
+        """Get all data stored for the specified user."""
+        return await self.config.user_from_id(user_id).all()
 
     async def _api_call(self, ctx: commands.Context, endpoint: str) -> Optional[Dict[str, Any]]:
         async with self.session.get(NEKOS + endpoint) as response:

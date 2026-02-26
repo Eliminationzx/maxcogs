@@ -47,7 +47,7 @@ class NoSpoiler(commands.Cog):
 
     def __init__(self, bot: Red) -> None:
         self.bot: Red = bot
-        self.config: Config = Config.get_conf(self, identifier=1234567890, force_registration=True)
+        self.config: Config = Config.get_conf(self, identifier=8765432109, force_registration=True)
         self._cache: Dict[int, Dict[str, Any]] = {}
         default_guild: Dict[str, Union[bool, Optional[int], str]] = {
             "enabled": False,

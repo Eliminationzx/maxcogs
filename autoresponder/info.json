@@ -1,0 +1,14 @@
+{
+    "author": ["max"],
+    "name": "AutoResponder",
+    "short": "Auto responder for keyword-based automatic responses",
+    "description": "Automatically responds to messages containing configured keywords with customizable responses and cooldowns.",
+    "tags": ["automation", "utility", "moderation"],
+    "requirements": [],
+    "hidden": false,
+    "min_bot_version": "3.5.0",
+    "min_python_version": "3.8.1",
+    "install_msg": "Thank you for installing the AutoResponder cog. Use [p]autoresponder to get started.",
+    "end_user_data_statement": "This cog does not persistently store data about users.",
+    "type": "COG"
+}
